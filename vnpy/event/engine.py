@@ -1,12 +1,15 @@
 """
 Event-driven framework of VeighNa framework.
 """
-
+import threading
 from collections import defaultdict
 from queue import Empty, Queue
 from threading import Thread
 from time import sleep
 from typing import Any, Callable, List
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.executors.pool import ProcessPoolExecutor, ThreadPoolExecutor
 
 EVENT_TIMER = "eTimer"
 
@@ -37,7 +40,7 @@ class EventEngine:
     which can be used for timing purpose.
     """
 
-    def __init__(self, interval: int = 1) -> None:
+    def __init__(self, interval: int = 1, ) -> None:
         """
         Timer event is generated every 1 second by default, if
         interval not specified.
@@ -45,9 +48,15 @@ class EventEngine:
         self._interval: int = interval
         self._queue: Queue = Queue()
         self._active: bool = False
+
+        executors = {
+            'default': ThreadPoolExecutor(max_workers=5)
+        }
+
         self._thread: Thread = Thread(target=self._run)
-        self._timer: Thread = Thread(target=self._run_timer)
+        self._timer = BackgroundScheduler(executors=executors)
         self._handlers: defaultdict = defaultdict(list)
+        self._timer_handlers: dict = {}
         self._general_handlers: List = []
 
     def _run(self) -> None:
@@ -97,7 +106,7 @@ class EventEngine:
         Stop event engine.
         """
         self._active = False
-        self._timer.join()
+        self._timer.shutdown()
         self._thread.join()
 
     def put(self, event: Event) -> None:
@@ -114,6 +123,9 @@ class EventEngine:
         handler_list: list = self._handlers[type]
         if handler not in handler_list:
             handler_list.append(handler)
+            if type == EVENT_TIMER:
+                job = self._timer.add_job(handler, 'interval', seconds=self._interval, args=[Event(EVENT_TIMER)])
+                self._timer_handlers[handler] = job.id
 
     def unregister(self, type: str, handler: HandlerType) -> None:
         """
@@ -123,6 +135,9 @@ class EventEngine:
 
         if handler in handler_list:
             handler_list.remove(handler)
+            if type == EVENT_TIMER:
+                self._timer.remove_job(self._timer_handlers[handler])
+                self._timer_handlers.pop(handler)
 
         if not handler_list:
             self._handlers.pop(type)
